@@ -1,6 +1,6 @@
 # RodentVision
 
-RodentVision is a Windows desktop app for running V21 rodent detection on recorded thermal video and reviewing positive frames.
+This branch of RodentVision is a Windows desktop app for reviewing littering, bird feeding, and dog occurrence in recorded video. It sends selected clips to Gemini Decision 1 for analysis and generates a Littering Act Report.
 
 [Download page](https://k2559.github.io/RodentVision/) · [Windows releases](https://github.com/K2559/RodentVision/releases)
 
@@ -20,7 +20,17 @@ Run `npm run dev` for local development or `npm run dist` on Windows to package 
 python -m unittest discover -s backend -p "test_*.py"
 ```
 
-## Run a video
+## Analyze and report on littering events
+
+1. Drop one or more video clips anywhere in the desktop app or select **Choose videos**.
+2. Enter an API key with access to Gemini Decision 1. You can also set `GEMINI_API_KEY` before launching the app. The app keeps a key entered in the window in memory for that session.
+3. Select a clip and click **Analyze with Gemini** to send that video to Google. Analyze each clip you want to include. The app uses one decision request with high-resolution video and supports clips up to 7 minutes 30 seconds.
+4. Select a candidate timestamp to seek to it. Confirm or reject each candidate, add missed events at the current playback time, and mark the full clip reviewed when finished.
+5. Open **Report** to save a CSV or PDF with one row per clip. The table shows confirmed timestamps, marks unfinished clips **REVIEW PENDING**, and uses **NA** for reviewed clips without confirmed events.
+
+## Original V21 rodent workflow
+
+Set `RODENTVISION_MODE=rodent` before launching from this checkout to open the original workflow.
 
 1. Extract the Windows x64 ZIP and open `RodentVision/RodentVision.exe`.
 2. Select a supported V21 `.pth` checkpoint and drop a video into **Source video**.

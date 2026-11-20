@@ -1,6 +1,15 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("rodentVision", {
+  geminiConfigured: () => ipcRenderer.invoke("gemini:configured"),
+  analyzeWithGemini: options => ipcRenderer.invoke("gemini:analyze", options),
+  cancelGemini: () => ipcRenderer.invoke("gemini:cancel"),
+  saveLitteringReport: (format, csv) => ipcRenderer.invoke("littering:save-report", format, csv),
+  onGeminiPhase: callback => {
+    const listener = (_event, message) => callback(message);
+    ipcRenderer.on("gemini:phase", listener);
+    return () => ipcRenderer.removeListener("gemini:phase", listener);
+  },
   getEnvironment: () => ipcRenderer.invoke("environment:get"),
   chooseCheckpoint: () => ipcRenderer.invoke("dialog:checkpoint"),
   chooseVideo: () => ipcRenderer.invoke("dialog:video"),

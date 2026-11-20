@@ -215,7 +215,25 @@ export type BatchInferenceResponse =
   | { event: "cancelled"; message: string; completed: BatchInferenceOutput[]; cancelledIndex: number }
   | { event: "batch-error"; message: string; completed: BatchInferenceOutput[]; failedIndex: number };
 
+export type LitteringCategory = "pedestrian_littering" | "vehicle_littering" | "bird_feeding" | "dog_presence";
+
+export interface GeminiEvent {
+  timestampSeconds: number;
+  category: LitteringCategory;
+  score: number;
+}
+
+export interface GeminiResult {
+  model: string;
+  events: GeminiEvent[];
+}
+
 export interface RodentVisionBridge {
+  geminiConfigured(): Promise<boolean>;
+  analyzeWithGemini(options: { video: string; duration: number; key: string }): Promise<GeminiResult | null>;
+  cancelGemini(): Promise<void>;
+  onGeminiPhase(callback: (message: string) => void): () => void;
+  saveLitteringReport(format: "csv" | "pdf", csv?: string): Promise<string | null>;
   getEnvironment(): Promise<EnvironmentInfo>;
   chooseCheckpoint(): Promise<string | null>;
   chooseVideo(): Promise<string | null>;

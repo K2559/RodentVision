@@ -1,10 +1,14 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import App from "./App";
+import LegacyApp from "./App";
+import LitteringApp from "./LitteringApp";
 import "./styles.css";
+import "./littering.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    {new URLSearchParams(window.location.search).get("mode") === "rodent"
+      ? <LegacyApp />
+      : <LitteringApp />}
   </StrictMode>,
 );

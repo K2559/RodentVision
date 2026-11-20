@@ -3,14 +3,14 @@ const {
   BrowserWindow,
   dialog,
   ipcMain,
-  net,
   protocol,
   shell,
 } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
-const { pathToFileURL } = require("node:url");
+const { Readable } = require("node:stream");
+const gemini = require("./gemini.cjs");
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -44,6 +44,7 @@ const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v
 
 let mainWindow = null;
 let activeInference = null;
+let activeGemini = null;
 
 function terminateProcessTree(child) {
   if (!child || child.exitCode !== null || !child.pid) return;
@@ -66,7 +67,7 @@ function existingProjectRoot() {
   ].filter(Boolean);
   return candidates.find((candidate) =>
     fs.existsSync(path.join(candidate, "training_scripts", "pilot18_two_stage_v21.py")),
-  ) || FALLBACK_PROJECT_ROOT;
+  ) || process.env.RODENTVISION_PROJECT_ROOT || KNOWN_PROJECT_ROOT;
 }
 
 function backendPath() {
@@ -313,6 +314,51 @@ async function stageOriginalVideos(sender, videos, outputDirectory) {
 }
 
 function registerIpc() {
+  ipcMain.handle("gemini:configured", () => Boolean(process.env.GEMINI_API_KEY?.trim()));
+  ipcMain.handle("gemini:analyze", async (event, options) => {
+    if (activeGemini) throw new Error("Gemini is already analyzing a video.");
+    const video = requirePath(options?.video, "Source video");
+    const key = process.env.GEMINI_API_KEY?.trim() || options?.key?.trim();
+    if (!key) throw new Error("Enter a Gemini API key.");
+    const controller = new AbortController();
+    activeGemini = controller;
+    try {
+      return await gemini.analyze({
+        video,
+        extension: path.extname(video).toLowerCase(),
+        duration: options.duration,
+        key,
+        signal: controller.signal,
+        onPhase: message => {
+          if (!event.sender.isDestroyed()) event.sender.send("gemini:phase", message);
+        },
+      });
+    } catch (error) {
+      if (controller.signal.aborted) return null;
+      throw error;
+    } finally {
+      activeGemini = null;
+    }
+  });
+  ipcMain.handle("gemini:cancel", () => { activeGemini?.abort(); });
+  ipcMain.handle("littering:save-report", async (event, format, csv) => {
+    if (!["csv", "pdf"].includes(format)) throw new Error("Unsupported report format.");
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "Save Littering Act Report",
+      defaultPath: "Littering Act Report." + format,
+      filters: [{ name: format.toUpperCase(), extensions: [format] }],
+    });
+    if (result.canceled || !result.filePath) return null;
+    let contents;
+    if (format === "pdf") {
+      contents = await event.sender.printToPDF({ pageSize: "A4", printBackground: true, preferCSSPageSize: true });
+    } else {
+      if (typeof csv !== "string" || csv.length > 2_000_000) throw new Error("Invalid report content.");
+      contents = "\uFEFF" + csv;
+    }
+    await fs.promises.writeFile(result.filePath, contents);
+    return result.filePath;
+  });
   ipcMain.handle("environment:get", async () => {
     const projectRoot = existingProjectRoot();
     const checkpoint = path.join(projectRoot, ...DEFAULT_CHECKPOINT_PARTS);
@@ -571,7 +617,7 @@ function createWindow() {
     minWidth: 1080,
     minHeight: 700,
     backgroundColor: "#edf2f0",
-    title: "RodentVision",
+    title: process.env.RODENTVISION_MODE === "rodent" ? "RodentVision" : "RodentVision · Littering Event Review",
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
@@ -590,10 +636,13 @@ function createWindow() {
     mainWindow = null;
   });
 
+  const query = process.env.RODENTVISION_MODE === "rodent" ? { mode: "rodent" } : {};
   if (process.env.VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
+    const url = new URL(process.env.VITE_DEV_SERVER_URL);
+    if (query.mode) url.searchParams.set("mode", query.mode);
+    mainWindow.loadURL(url.toString());
   } else {
-    mainWindow.loadFile(path.join(SOURCE_ROOT, "dist", "index.html"));
+    mainWindow.loadFile(path.join(SOURCE_ROOT, "dist", "index.html"), { query });
   }
 
   const screenshotPath = process.env.RODENTVISION_SCREENSHOT_PATH;
@@ -609,6 +658,11 @@ function createWindow() {
   }
 }
 
+if (process.env.RODENTVISION_MODE !== "rodent" && !app.commandLine.hasSwitch("user-data-dir")) {
+  const profile = path.join(app.getPath("appData"), "RodentVision Littering");
+  fs.mkdirSync(profile, { recursive: true });
+  app.setPath("userData", profile);
+}
 const hasLock = app.requestSingleInstanceLock();
 if (!hasLock) {
   app.quit();
@@ -630,22 +684,35 @@ if (!hasLock) {
         if (!VIDEO_EXTENSIONS.has(path.extname(resolved).toLowerCase())) {
           return new Response("Unsupported media type", { status: 415 });
         }
-        // Preserve media seek headers. Without the Range request, Chromium can
-        // only read the file from byte zero and native/custom timelines snap
-        // back to the beginning after a drag.
-        const mediaHeaders = {};
-        // Electron versions expose protocol headers either as a plain object
-        // or as a Fetch Headers instance. Support both so Range survives the
-        // custom media URL in every packaged runtime.
-        const requestHeaderEntries = typeof request.headers?.entries === "function"
-          ? Array.from(request.headers.entries())
-          : Object.entries(request.headers || {});
-        for (const [header, value] of requestHeaderEntries) {
-          if (/^(range|if-range|if-none-match|if-modified-since|accept|cache-control)$/i.test(header)) {
-            mediaHeaders[header] = value;
+        const { size } = fs.statSync(resolved);
+        const type = {
+          ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
+          ".mkv": "video/x-matroska", ".avi": "video/x-msvideo", ".webm": "video/webm",
+        }[path.extname(resolved).toLowerCase()];
+        const headers = { "Accept-Ranges": "bytes", "Content-Type": type };
+        const range = request.headers?.get("range");
+        let start = 0;
+        let end = size - 1;
+        if (range) {
+          const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+          if (match && (match[1] || match[2])) {
+            if (match[1]) {
+              start = Number(match[1]);
+              if (match[2]) end = Math.min(end, Number(match[2]));
+            } else {
+              start = Math.max(0, size - Number(match[2]));
+            }
           }
+          if (!match || (!match[1] && !match[2]) || start > end) {
+            headers["Content-Range"] = "bytes */" + size;
+            return new Response(null, { status: 416, headers });
+          }
+          headers["Content-Range"] = "bytes " + start + "-" + end + "/" + size;
         }
-        return net.fetch(pathToFileURL(resolved).toString(), { headers: mediaHeaders });
+        headers["Content-Length"] = String(end - start + 1);
+        const body = request.method === "HEAD" || size === 0
+          ? null : Readable.toWeb(fs.createReadStream(resolved, { start, end }));
+        return new Response(body, { status: range ? 206 : 200, headers });
       } catch (error) {
         return new Response(error.message, { status: 404 });
       }
@@ -656,6 +723,7 @@ if (!hasLock) {
 }
 
 app.on("before-quit", () => {
+  activeGemini?.abort();
   terminateProcessTree(activeInference);
 });
 
