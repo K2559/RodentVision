@@ -1,0 +1,109 @@
+:root {
+  color-scheme: dark;
+  --page: #111927;
+  --panel: #172437;
+  --text: #f3f6fa;
+  --muted: #b7c5d5;
+  --edge: #394c62;
+  --highlight: #f6c878;
+  font-family: "Inter", "Segoe UI", sans-serif;
+  font-synthesis: none;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text); line-height: 1.6; }
+a { color: var(--highlight); text-underline-offset: .25em; }
+a:hover { text-decoration-thickness: 2px; }
+a:focus-visible { outline: 2px solid var(--highlight); outline-offset: 5px; }
+.shell { width: min(100% - 3rem, 68rem); margin-inline: auto; }
+.site-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding-block: 1.25rem;
+  border-bottom: 1px solid var(--edge);
+}
+.site-header a { color: var(--muted); font-size: .9rem; }
+.wordmark { font-size: 1.1rem; font-weight: 750; letter-spacing: -.035em; }
+.hero {
+  display: grid;
+  grid-template-columns: 1.16fr 1fr;
+  gap: clamp(2rem, 6vw, 5rem);
+  align-items: center;
+  padding-block: clamp(3rem, 8vw, 6rem);
+}
+.release, .workflow p, .exports {
+  font: 500 .8rem/1.5 "IBM Plex Mono", Consolas, monospace;
+}
+.release { color: var(--highlight); margin: 0 0 1.35rem; }
+h1 {
+  font-size: clamp(2.65rem, 6vw, 5.1rem);
+  line-height: 1.01;
+  letter-spacing: -.067em;
+  margin: 0;
+  max-width: 11ch;
+}
+.intro { color: var(--muted); max-width: 38ch; font-size: 1.08rem; margin: 1.4rem 0 1.65rem; }
+.download {
+  display: inline-flex;
+  align-items: center;
+  gap: 1rem;
+  padding: .8rem 1.12rem;
+  background: var(--highlight);
+  color: var(--page);
+  font-weight: 750;
+  text-decoration: none;
+  border-radius: .38rem;
+}
+.download:hover { background: #ffdb9b; }
+.workflow {
+  padding: 1rem;
+  border: 1px solid var(--edge);
+  border-radius: .75rem;
+  background: var(--panel);
+}
+.workflow p { margin: 0 0 .8rem; color: var(--muted); }
+.video {
+  display: grid;
+  gap: .9rem;
+  align-content: center;
+  justify-items: center;
+  min-height: 13rem;
+  aspect-ratio: 16 / 10;
+  border: 1px dashed var(--edge);
+  background: var(--page);
+  border-radius: .3rem;
+}
+.focus {
+  width: 3rem;
+  height: 2.05rem;
+  border: 1px solid var(--highlight);
+  position: relative;
+}
+.focus::after {
+  content: "";
+  position: absolute;
+  inset: .35rem;
+  border: 1px solid var(--edge);
+}
+.exports { display: flex; gap: .35rem 1rem; flex-wrap: wrap; margin-top: .85rem; color: var(--muted); }
+.setup {
+  display: grid;
+  grid-template-columns: 1.16fr 1fr;
+  gap: clamp(1.5rem, 6vw, 5rem);
+  padding-block: 2rem 4rem;
+  border-top: 1px solid var(--edge);
+}
+.setup h2 { margin: 0 0 .45rem; font-size: 1.32rem; letter-spacing: -.02em; }
+.setup ol { padding-inline-start: 1.25rem; }
+.setup p, .setup ol { color: var(--muted); margin: .6rem 0; }
+.setup li + li { margin-top: .35rem; }
+code { color: var(--text); overflow-wrap: anywhere; }
+
+@media (max-width: 700px) {
+  .hero, .setup { grid-template-columns: 1fr; }
+  .shell { width: calc(100% - 2rem); }
+  .hero { gap: 2rem; }
+  .workflow { max-width: 32rem; }
+}
