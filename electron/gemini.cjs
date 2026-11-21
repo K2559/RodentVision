@@ -4,12 +4,17 @@ const { setTimeout: pause } = require("node:timers/promises");
 
 const BASE = "https://generativelanguage.googleapis.com";
 const MODEL = "gemini-decision-1";
+const MODEL_ID = /^gemini-decision-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const RESOLUTIONS = new Set(["high", "low"]);
+const MIN_EVIDENCE = .5;
+const STRONG_NORMAL_ACTION = .75;
 const MIME = { ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/mov", ".avi": "video/avi", ".webm": "video/webm", ".mkv": "video/x-matroska" };
 
 const rubric = [
   "Inspect the full chronological CCTV clip for new littering, deliberate bird feeding, and recognizable dog occurrence.",
   "Require a causal link between a person or vehicle and a new release or abandoned deposit. Exclude ordinary movement, collection, proper bin disposal, old debris, and shadows.",
-  "Timestamp littering at first ground contact and dog occurrence at the first moment the dog is within view and recognizable. Use elapsed seconds from the clip start. Report each distinct event once.",
+  "Use before, action, and after together. Look for material transfer from the source to newly occupied ground. An obscured drop may qualify if the causal sequence is visible. A gesture, nearby vehicle, animal, or an unidentifiable object alone does not establish deposition.",
+  "Timestamp littering at first ground contact and dog occurrence at the first moment the dog is within view and recognizable, even if partly occluded. Use elapsed seconds from the clip start. Assess every question independently and report each distinct event once.",
 ].join(" ");
 
 function buildQuestions(duration) {
@@ -19,7 +24,7 @@ function buildQuestions(duration) {
   for (let second = 0; second < count; second++) {
     questions["release_" + second] = {
       type: "noul",
-      instructions: "Does a new littering act or deliberate bird feeding reach the ground nearest elapsed second " + second + "? Require a linked source and new deposit.",
+      instructions: "Does newly released or abandoned material first reach the ground nearest elapsed second " + second + "? Require before/action/after evidence of source-to-ground transfer. Exclude retrieval, bin use, old debris, continued presence and departure.",
     };
     questions["dog_" + second] = {
       type: "noul",
@@ -39,7 +44,7 @@ function buildQuestions(duration) {
         unresolved: "Ordinary activity, previously present debris, or insufficient evidence.",
       },
     };
-    questions[prefix + "_confirm"] = { type: "noul", instructions: scope + "is a new source-linked ground deposit established?" };
+    questions[prefix + "_confirm"] = { type: "noul", instructions: scope + "is a new deposit supported by a linked source, release or placement, and a new deposit or release path? Use what was present before and what changed after." };
     questions[prefix + "_category"] = {
       type: "choice", instructions: scope + "classify the strongest supported deposition.",
       criteria: {
@@ -49,7 +54,8 @@ function buildQuestions(duration) {
         unresolved: "No supported category.",
       },
     };
-    questions[prefix + "_dog"] = { type: "noul", instructions: scope + "does a recognizable dog first come fully into view?" };
+    questions[prefix + "_normal"] = { type: "noul", instructions: scope + "is the apparent disposal positively explained by ordinary motion, collection, temporary handling, bin use, old debris revealed after occlusion, or a visual artifact, with no new deposition? Insufficient evidence by itself is not a positive explanation." };
+    questions[prefix + "_dog"] = { type: "noul", instructions: scope + "does a recognizable dog first come fully into the field of view, allowing partial occlusion? Exclude continued presence, humans, other animals, and shadows." };
     if (end === count) break;
   }
   return { questions, windows };
@@ -66,7 +72,11 @@ function decode(response, questions, windows) {
     const choices = Object.keys(question.criteria ?? {});
     const valid = question.type === "noul"
       ? probability(answer?.noul)
-      : choices.includes(answer?.choice) && choices.every(choice => probability(answer?.probabilities?.[choice]));
+      : choices.includes(answer?.choice)
+        && Object.keys(answer.probabilities ?? {}).length === choices.length
+        && choices.every(choice => probability(answer.probabilities?.[choice]))
+        && Math.abs(choices.reduce((sum, choice) => sum + answer.probabilities[choice], 0) - 1) <= .03
+        && choices.every(choice => answer.probabilities[choice] <= answer.probabilities[answer.choice] + .000001);
     if (answer?.type !== question.type || !valid) {
       throw new Error("Gemini returned an invalid answer for " + id + ".");
     }
@@ -74,11 +84,11 @@ function decode(response, questions, windows) {
 
   const candidates = [];
   function collect(window, prefix, category, confirmation) {
-    if (confirmation < .5) return;
+    if (confirmation < MIN_EVIDENCE) return;
     let peak = null;
     for (let second = window.start; second <= window.end; second++) {
       const score = second < window.end ? answers[prefix + second].noul : 0;
-      if (score >= .5) {
+      if (score >= MIN_EVIDENCE) {
         if (!peak || score > peak.score) peak = { timestampSeconds: second, score };
       } else if (peak) {
         candidates.push({
@@ -96,8 +106,10 @@ function decode(response, questions, windows) {
   for (const window of windows) {
     const physical = answers[window.prefix + "_physical"];
     const category = answers[window.prefix + "_category"].choice;
-    if (physical.choice === "new_deposit" && category !== "unresolved") {
-      const confirm = Math.min(physical.probabilities.new_deposit, answers[window.prefix + "_confirm"].noul);
+    const confirmed = answers[window.prefix + "_confirm"].noul;
+    const normal = answers[window.prefix + "_normal"].noul;
+    if (physical.choice === "new_deposit" && category !== "unresolved" && normal < STRONG_NORMAL_ACTION) {
+      const confirm = Math.min(physical.probabilities.new_deposit, confirmed);
       collect(window, "release_", category, confirm);
     }
     collect(window, "dog_", "dog_presence", answers[window.prefix + "_dog"].noul);
@@ -123,8 +135,12 @@ function uploadEndpoint(value) {
   return url;
 }
 
-async function analyze({ video, extension, duration, key, onPhase, signal, fetcher = fetch }) {
+async function analyze({ video, extension, duration, key, model = MODEL, resolution = "high", onPhase, signal, fetcher = fetch }) {
   const mime = MIME[extension];
+  if (typeof model !== "string" || model.length > 80 || !MODEL_ID.test(model)) {
+    throw new Error("Enter a Gemini Decision model ID, for example gemini-decision-1.");
+  }
+  if (!RESOLUTIONS.has(resolution)) throw new Error("Choose High or Low video resolution.");
   if (!Object.hasOwn(MIME, extension)) throw new Error("Choose a supported video file.");
   if (!Number.isFinite(duration) || duration <= 0 || duration > 450) {
     throw new Error("Gemini analysis supports clips up to 7 minutes 30 seconds.");
@@ -144,8 +160,8 @@ async function analyze({ video, extension, duration, key, onPhase, signal, fetch
       const detail = {
         400: " Check the API key and video format.",
         401: " Check your Gemini API key.",
-        403: " Check your API key and access to Gemini Decision 1.",
-        404: " Check whether Gemini Decision 1 is available to this Google project.",
+        403: " Check your API key and access to the selected Gemini Decision model.",
+        404: " Check whether the selected Gemini Decision model is available to this Google project.",
         429: " Check the project’s Gemini quota and billing.",
       }[result.status] ?? "";
       throw new Error(stage + " failed (HTTP " + result.status + ")." + detail);
@@ -201,18 +217,18 @@ async function analyze({ video, extension, duration, key, onPhase, signal, fetch
     if (remote.state !== "ACTIVE" || remote.uri !== fileUrl) {
       throw new Error("Gemini could not prepare this video.");
     }
-    onPhase("Analyzing events with Gemini Decision 1");
+    onPhase("Checking events with " + model);
     const result = await request("Gemini analysis", BASE + "/v1beta/decisions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: MODEL,
-        input: [{ type: "text", text: rubric }, { type: "video", uri: remote.uri, mime_type: mime, resolution: "high" }],
+        model,
+        input: [{ type: "text", text: rubric }, { type: "video", uri: remote.uri, mime_type: mime, resolution }],
         questions,
       }),
     });
     const response = await result.json();
-    return { model: MODEL, events: decode(response, questions, windows) };
+    return { model, events: decode(response, questions, windows) };
   } finally {
     if (/^files\/[a-zA-Z0-9_-]+$/.test(remote?.name ?? "")) {
       // Clean up the uploaded file even when the analysis is cancelled.

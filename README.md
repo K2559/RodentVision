@@ -23,10 +23,25 @@ python -m unittest discover -s backend -p "test_*.py"
 ## Analyze and report on littering events
 
 1. Drop one or more video clips anywhere in the desktop app or select **Choose videos**.
-2. Enter an API key with access to Gemini Decision 1. You can also set `GEMINI_API_KEY` before launching the app. The app keeps a key entered in the window in memory for that session.
-3. Select a clip and click **Analyze with Gemini** to send that video to Google. Analyze each clip you want to include. The app uses one decision request with high-resolution video and supports clips up to 7 minutes 30 seconds.
+2. Open **Settings** to enter an API key, set the Gemini Decision model ID, or choose High or Low resolution. The defaults are `gemini-decision-1` and High. You can also set `GEMINI_API_KEY` before launching the app. The key entered in Settings is used for the current session.
+3. Select a clip and click **Analyze with Gemini** to send it to Google. The app uses one decision request and supports clips up to 7 minutes 30 seconds. It checks before/action/after evidence for new source-to-ground deposition, corroborates the timestamp and category, rejects windows with strong evidence of ordinary activity, and combines duplicate alerts in overlapping windows. Dog onset is checked separately. This adapts the workspace's full-video Gemini checks and the ordinary-action check from the Jev trials.
 4. Select a candidate timestamp to seek to it. Confirm or reject each candidate, add missed events at the current playback time, and mark the full clip reviewed when finished.
-5. Open **Report** to save a CSV or PDF with one row per clip. The table shows confirmed timestamps, marks unfinished clips **REVIEW PENDING**, and uses **NA** for reviewed clips without confirmed events.
+5. Open **Report** to see the paginated A4 sheets and save the report as PDF or CSV. The table shows confirmed timestamps, marks unfinished clips **REVIEW PENDING**, and uses **NA** for reviewed clips without confirmed events.
+
+## Import human-reviewed results
+
+Load the matching videos, then use **Report → CSV template** or save a UTF-8 CSV with these columns. Select **Import reviewed CSV** when ready.
+
+```csv
+clip_name,event_time,event_type
+1B,02:05,pedestrian_littering
+2B,NA,
+23B,04:38,dog_presence
+```
+
+Use the clip filename with or without its video extension. Use one row per event, with elapsed seconds, `MM:SS`, or `HH:MM:SS` in `event_time`. Accepted event types are `pedestrian_littering`, `vehicle_littering`, `bird_feeding`, and `dog_presence`. For a fully reviewed clip with no events, use one `NA` row with a blank event type.
+
+The CSV supplies the complete reviewed result for each listed clip. Unlisted clips keep their current review. Select **Restore prior review** on a clip to remove its imported override. Keep the source CSV to reimport the review in a future session.
 
 ## Original V21 rodent workflow
 

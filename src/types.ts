@@ -228,9 +228,14 @@ export interface GeminiResult {
   events: GeminiEvent[];
 }
 
+export interface GeminiSettings {
+  model: string;
+  resolution: "high" | "low";
+}
+
 export interface RodentVisionBridge {
   geminiConfigured(): Promise<boolean>;
-  analyzeWithGemini(options: { video: string; duration: number; key: string }): Promise<GeminiResult | null>;
+  analyzeWithGemini(options: GeminiSettings & { video: string; duration: number; key: string }): Promise<GeminiResult | null>;
   cancelGemini(): Promise<void>;
   onGeminiPhase(callback: (message: string) => void): () => void;
   saveLitteringReport(format: "csv" | "pdf", csv?: string): Promise<string | null>;

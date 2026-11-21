@@ -16,8 +16,8 @@
 .littering-clip[aria-pressed="true"] { background: #e2f2ed; border-color: var(--accent); }
 .littering-clip strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .littering-clip small, .littering-config p, .littering-app .review-panel p { font-size: 12px; color: var(--muted); line-height: 1.55; }
-.littering-config label { display: grid; gap: 6px; font-size: 12px; }
-.littering-config input, .littering-events select, .littering-manual select {
+.littering-settings label { display: grid; gap: 6px; font-size: 13px; }
+.littering-settings input, .littering-settings select, .littering-events select, .littering-manual select {
   min-width: 0;
   padding: 7px;
   border: 1px solid var(--line);
@@ -43,12 +43,55 @@
 .littering-manual { display: flex; flex-wrap: wrap; gap: 6px; }
 .littering-manual select { font-size: 11px; }
 .littering-signoff { display: flex; gap: 7px; align-items: center; font-size: 13px; margin-top: 18px; }
-.littering-report { flex: 1; overflow: auto; padding: 26px clamp(24px, 8vw, 100px); background: white; }
-.littering-report-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
-.littering-report h1 { font: bold 25px "Times New Roman", serif; margin: 0; }
-.littering-report table { width: 100%; border-collapse: collapse; table-layout: fixed; font: 16px "Times New Roman", serif; }
-.littering-report th, .littering-report td { border: 1px solid #353535; text-align: center; padding: 9px; white-space: pre-line; overflow-wrap: anywhere; }
-.littering-report th:first-child { width: 40%; }
+.littering-settings { flex: 1; min-height: 0; overflow: auto; padding: 24px max(24px, calc((100% - 700px) / 2)); }
+.littering-settings h1 { margin: 18px 0; font-size: 25px; }
+.littering-settings form { display: grid; gap: 17px; justify-items: start; }
+.littering-settings fieldset {
+  display: grid;
+  width: 100%;
+  gap: 14px;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+}
+.littering-settings legend { font-weight: 650; padding: 0 5px; }
+.littering-settings small, .littering-settings p { color: var(--muted); margin: 0; }
+.littering-report { flex: 1; min-height: 0; overflow: auto; background: #e0e8e5; }
+.littering-report-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 22px;
+  border-bottom: 1px solid var(--line);
+  background: white;
+}
+.littering-report-toolbar a { text-decoration: none; }
+.report-zoom { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.report-zoom select { padding: 5px; border: 1px solid var(--line); border-radius: 4px; background: white; }
+.report-paper-stack { display: grid; justify-content: center; gap: 24px; padding: 24px; }
+.report-paper {
+  width: 210mm;
+  height: 297mm;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 5mm;
+  padding: 15mm;
+  background: white;
+  color: #141414;
+  box-shadow: 0 3px 14px #19372f24;
+}
+.report-paper h1 { font: bold 17pt "Times New Roman", serif; margin: 0; }
+.report-paper footer { font: 10pt "Times New Roman", serif; text-align: right; }
+.report-sheet-body table { width: 100%; border-collapse: collapse; table-layout: fixed; font: 11pt/1.35 "Times New Roman", serif; }
+.report-sheet-body th, .report-sheet-body td { border: 1px solid #353535; padding: 1.75mm 3mm; text-align: center; white-space: pre-line; overflow-wrap: anywhere; }
+.report-sheet-body th:first-child { width: 40%; }
+.report-measure { position: absolute; top: 0; left: -10000px; visibility: hidden; pointer-events: none; }
 .littering-status { white-space: normal; }
 .littering-drop-overlay {
   position: fixed;
@@ -64,13 +107,13 @@
 }
 .littering-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 @media print {
-  @page { size: A4 portrait; margin: 15mm; }
+  @page { size: A4 portrait; margin: 0; }
   html, body, #root, .littering-app { height: auto; min-width: 0; overflow: visible; background: white; }
   .littering-app { display: block; }
   .littering-app .topbar, .littering-app .workspace, .littering-app .statusbar,
-  .littering-report-toolbar .topbar-actions, .littering-drop-overlay { display: none; }
+  .littering-report-toolbar, .littering-settings, .littering-drop-overlay, .report-measure { display: none; }
   .littering-report { display: block; overflow: visible; padding: 0; }
-  .littering-report thead { display: table-header-group; }
-  .littering-report tr { break-inside: avoid; }
-  .littering-report th, .littering-report td { padding: 5px; }
+  .report-paper-stack { display: block; padding: 0; }
+  .report-paper { zoom: 1 !important; height: 296.8mm; box-shadow: none; break-inside: avoid; }
+  .report-paper + .report-paper { break-before: page; }
 }

@@ -1,33 +1,54 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
-import { Film, Upload } from "lucide-react";
-import type { GeminiEvent } from "./types";
+import { Film, Settings, Upload } from "lucide-react";
+import type { GeminiEvent, GeminiSettings } from "./types";
+import { clipName, displayName, eventNames as names, readHumanReview, reviewCsvTemplate } from "./human-review";
+import type { ReviewedTime } from "./human-review";
+import LitteringReport from "./LitteringReport";
 
 type ReviewEvent = Omit<GeminiEvent, "score"> & { score: number | null; decision: "pending" | "confirmed" | "rejected" };
-type Clip = { path: string; events?: ReviewEvent[]; reviewed?: boolean; analyzed?: boolean };
-const names = {
-  pedestrian_littering: "Pedestrian littering",
-  vehicle_littering: "Vehicle littering",
-  bird_feeding: "Bird feeding",
-  dog_presence: "Dog occurrence",
+type Clip = {
+  path: string;
+  duration?: number;
+  events?: ReviewEvent[];
+  reviewed?: boolean;
+  analyzed?: boolean;
+  imported?: ReviewedTime[];
 };
+const defaultModel = "gemini-decision-1";
+const modelIdPattern = /^gemini-decision-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const settingsKey = "rodentvision.littering.model.v1";
 const categories = Object.keys(names) as GeminiEvent["category"][];
-const clipName = (path: string) => path.split(/[\\/]/).at(-1) ?? path;
-const displayName = (path: string) => clipName(path).replace(/\.[^.]+$/, "");
+
+function loadSettings(): GeminiSettings {
+  try {
+    const saved = JSON.parse(localStorage.getItem(settingsKey) ?? "{}");
+    return {
+      model: typeof saved.model === "string" && modelIdPattern.test(saved.model) ? saved.model : defaultModel,
+      resolution: saved.resolution === "low" ? "low" : "high",
+    };
+  } catch {
+    return { model: defaultModel, resolution: "high" };
+  }
+}
 
 function timeCode(seconds: number) {
+  const milliseconds = Math.round(seconds * 1000);
+  const wholeSeconds = Math.floor(milliseconds / 1000);
   const [hours, minutes, remainder] = [
-    Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, Math.floor(seconds) % 60,
+    Math.floor(wholeSeconds / 3600), Math.floor(wholeSeconds / 60) % 60, wholeSeconds % 60,
   ].map(value => String(value).padStart(2, "0"));
-  const fraction = (seconds % 1).toFixed(3).slice(1).replace(/\.?0+$/, "");
-  return (hours === "00" ? minutes + ":" + remainder : hours + ":" + minutes + ":" + remainder) + fraction;
+  const fraction = String(milliseconds % 1000).padStart(3, "0").replace(/0+$/, "");
+  const time = hours === "00" ? minutes + ":" + remainder : hours + ":" + minutes + ":" + remainder;
+  return fraction ? time + "." + fraction : time;
 }
 
 function reportTimes(clip: Clip) {
-  const confirmed = (clip.events ?? []).filter(event => event.decision === "confirmed")
+  const events = clip.imported ?? (clip.events ?? []).filter(event => event.decision === "confirmed");
+  const confirmed = [...events]
     .sort((a, b) => a.timestampSeconds - b.timestampSeconds)
     .map(event => timeCode(event.timestampSeconds) + (event.category === "dog_presence" ? " (dog)" : ""));
-  if (!clip.reviewed) confirmed.push("REVIEW PENDING");
+  if (!clip.reviewed && !clip.imported) confirmed.push("REVIEW PENDING");
   return confirmed.join("\n") || "NA";
 }
 
@@ -41,17 +62,25 @@ export default function LitteringApp() {
   const [clips, setClips] = useState<Clip[]>([]);
   const [selected, setSelected] = useState("");
   const [key, setKey] = useState("");
+  const [draftKey, setDraftKey] = useState("");
   const [configured, setConfigured] = useState(false);
-  const [duration, setDuration] = useState(0);
+  const [settings, setSettings] = useState(loadSettings);
+  const [draft, setDraft] = useState(settings);
   const [running, setRunning] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [report, setReport] = useState(false);
+  const [fitPage, setFitPage] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [manualCategory, setManualCategory] = useState<GeminiEvent["category"]>("pedestrian_littering");
   const videoRef = useRef<HTMLVideoElement>(null);
+  const csvRef = useRef<HTMLInputElement>(null);
   const clip = clips.find(item => item.path === selected);
+  const duration = clip?.duration ?? 0;
+  const busy = running || importing || saving;
 
   useEffect(() => {
     if (!bridge) return;
@@ -60,9 +89,33 @@ export default function LitteringApp() {
   }, [bridge]);
 
   function select(path: string) {
-    if (path === selected) return;
     setSelected(path);
-    setDuration(0);
+  }
+
+  function openSettings() {
+    videoRef.current?.pause();
+    setDraft(settings);
+    setDraftKey(key);
+    setShowSettings(true);
+  }
+
+  function applySettings() {
+    const model = draft.model.trim();
+    if (!modelIdPattern.test(model) || model.length > 80) {
+      setError("Enter a Gemini Decision model ID, for example gemini-decision-1.");
+      return;
+    }
+    const updated = { model, resolution: draft.resolution };
+    setSettings(updated);
+    setKey(draftKey.trim());
+    setError("");
+    setStatus("Settings saved.");
+    setShowSettings(false);
+    try {
+      localStorage.setItem(settingsKey, JSON.stringify(updated));
+    } catch {
+      setStatus("Settings applied for this session.");
+    }
   }
 
   function addPaths(paths: string[]) {
@@ -81,7 +134,7 @@ export default function LitteringApp() {
   function drop(event: DragEvent) {
     event.preventDefault();
     setDragging(false);
-    if (!bridge || running) return;
+    if (!bridge || busy || showSettings) return;
     addPaths(Array.from(event.dataTransfer.files, file => bridge.getPathForFile(file)));
   }
 
@@ -99,12 +152,12 @@ export default function LitteringApp() {
   }
 
   async function analyze() {
-    if (!clip || !duration || running) return;
+    if (!clip || !duration || busy || clip.imported) return;
     setRunning(true);
     setError("");
     setStatus("Starting Gemini analysis");
     try {
-      const result = await bridge.analyzeWithGemini({ video: clip.path, duration, key });
+      const result = await bridge.analyzeWithGemini({ video: clip.path, duration, key, ...settings });
       if (result) {
         updateClip(clip.path, current => ({
           ...current,
@@ -141,7 +194,27 @@ export default function LitteringApp() {
     }));
   }
 
-  const reportClips = [...clips].sort((a, b) => displayName(a.path).localeCompare(displayName(b.path), undefined, { numeric: true }));
+  const reportRows = useMemo(() => [...clips]
+    .sort((a, b) => displayName(a.path).localeCompare(displayName(b.path), undefined, { numeric: true }))
+    .map(item => ({ id: item.path, clip: displayName(item.path), times: reportTimes(item) })), [clips]);
+
+  async function importReview(file: File) {
+    setImporting(true);
+    setError("");
+    setStatus("");
+    try {
+      const updates = readHumanReview(await file.text(), clips);
+      setClips(items => items.map(item => {
+        const reviewed = updates.get(item.path);
+        return reviewed ? { ...item, imported: reviewed } : item;
+      }));
+      setStatus("Applied human review to " + updates.size + (updates.size === 1 ? " clip." : " clips."));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setImporting(false);
+    }
+  }
 
   async function save(format: "csv" | "pdf") {
     setSaving(true);
@@ -149,7 +222,7 @@ export default function LitteringApp() {
     try {
       const rows = [
         ["Name of Video Clip", "Time of the littering act / dog occurrence"],
-        ...reportClips.map(item => [displayName(item.path), reportTimes(item)]),
+        ...reportRows.map(row => [row.clip, row.times]),
       ];
       const csv = rows.map(row => row.map(csvCell).join(",")).join("\r\n");
       const saved = await bridge.saveLitteringReport(format, format === "csv" ? csv : undefined);
@@ -166,8 +239,8 @@ export default function LitteringApp() {
       onDragOver={event => {
         if (!event.dataTransfer.types.includes("Files")) return;
         event.preventDefault();
-        event.dataTransfer.dropEffect = running ? "none" : "copy";
-        if (!running) setDragging(true);
+        event.dataTransfer.dropEffect = busy || showSettings ? "none" : "copy";
+        if (!busy && !showSettings) setDragging(true);
       }}
       onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
       onDrop={drop}>
@@ -177,12 +250,46 @@ export default function LitteringApp() {
           <div><strong>RodentVision</strong><span>Littering event review</span></div>
         </div>
         <div className="topbar-actions">
-          <button className="quiet-button" type="button" aria-pressed={!report} disabled={saving} onClick={() => setReport(false)}>Review</button>
-          <button className="quiet-button" type="button" aria-pressed={report} disabled={saving || running} onClick={() => setReport(true)}>Report</button>
+          <button className="quiet-button" type="button" aria-pressed={!report && !showSettings} disabled={busy} onClick={() => { setReport(false); setShowSettings(false); }}>Review</button>
+          <button className="quiet-button" type="button" aria-pressed={report && !showSettings} disabled={busy} onClick={() => {
+            videoRef.current?.pause();
+            setReport(true);
+            setShowSettings(false);
+          }}>Report</button>
+          <button className="quiet-button" type="button" aria-pressed={showSettings} disabled={busy || showSettings} onClick={openSettings}><Settings size={15} /> Settings</button>
         </div>
       </header>
 
-      <div className="workspace littering-workspace" hidden={report}>
+      {showSettings && <section className="littering-settings">
+        <button className="quiet-button" onClick={() => setShowSettings(false)}>Back to {report ? "Report" : "Review"}</button>
+        <h1>Settings</h1>
+        <form onSubmit={event => { event.preventDefault(); applySettings(); }}>
+          <fieldset>
+            <legend>Gemini API</legend>
+            {configured ? <p>Using the GEMINI_API_KEY environment variable.</p> : (
+              <label>Gemini API key
+                <input type="password" value={draftKey} onChange={event => setDraftKey(event.target.value)} autoComplete="off" />
+                <small>The key entered here is used for this session.</small>
+              </label>
+            )}
+          </fieldset>
+          <fieldset>
+            <legend>Analysis model</legend>
+            <label>Gemini Decision model ID
+              <input value={draft.model} maxLength={80} onChange={event => setDraft({ ...draft, model: event.target.value })} required />
+            </label>
+            <label>Video resolution
+              <select value={draft.resolution} onChange={event => setDraft({ ...draft, resolution: event.target.value === "low" ? "low" : "high" })}>
+                <option value="high">High</option>
+                <option value="low">Low</option>
+              </select>
+            </label>
+          </fieldset>
+          <button className="littering-primary" type="submit">Save settings</button>
+        </form>
+      </section>}
+
+      <div className="workspace littering-workspace" hidden={report || showSettings}>
         <aside className="config-panel">
           <section className="panel-section">
             <div className="section-heading"><h2>Source videos</h2></div>
@@ -192,25 +299,21 @@ export default function LitteringApp() {
                 <button key={item.path} type="button" aria-pressed={item.path === selected}
                   disabled={running} className="littering-clip" onClick={() => select(item.path)} title={item.path}>
                   <strong>{clipName(item.path)}</strong>
-                  <small>{item.reviewed ? "Review complete" : item.events ? item.events.length + " candidates" : "Awaiting analysis"}</small>
+                  <small>{item.imported ? "Human review imported" : item.reviewed ? "Review complete" : item.events ? item.events.length + " candidates" : "Awaiting analysis"}</small>
                 </button>
               ))}
             </div>
           </section>
           <section className="panel-section littering-config">
-            <div className="section-heading"><h2>Gemini Decision 1</h2></div>
-            {configured ? <p>API key configured in the environment.</p> : (
-              <label>Gemini API key
-                <input type="password" value={key} onChange={event => setKey(event.target.value)} disabled={running}
-                  autoComplete="off" placeholder="Enter API key" />
-              </label>
-            )}
+            <div className="section-heading"><h2>Video analysis</h2></div>
+            <p>{settings.model} · {settings.resolution === "high" ? "High" : "Low"} resolution</p>
+            {!configured && !key.trim() && <button className="quiet-button" type="button" onClick={openSettings}>Set up Gemini</button>}
             <p>Analyze sends the selected video to Google Gemini.</p>
             {running ? (
               <button className="quiet-button" onClick={() => void bridge.cancelGemini()}>Cancel analysis</button>
             ) : (
               <button className="littering-primary" onClick={analyze}
-                disabled={!bridge || !clip || !duration || duration > 450 || clip.analyzed || (!configured && !key.trim())}>
+                disabled={!bridge || !clip || !duration || duration > 450 || clip.analyzed || Boolean(clip.imported) || (!configured && !key.trim())}>
                 Analyze with Gemini
               </button>
             )}
@@ -226,9 +329,12 @@ export default function LitteringApp() {
                 src={bridge.mediaUrl(clip.path)}
                 onLoadedMetadata={event => {
                   const length = event.currentTarget.duration;
-                  setDuration(Number.isFinite(length) ? length : 0);
+                  if (Number.isFinite(length) && length > 0) updateClip(clip.path, current => ({ ...current, duration: length }));
                 }}
-                onError={() => { setDuration(0); setError("Could not play this clip. Try an MP4 encoded with H.264."); }} />
+                onError={() => {
+                  updateClip(clip.path, current => ({ ...current, duration: undefined }));
+                  setError("Could not play this clip. Try an MP4 encoded with H.264.");
+                }} />
             ) : (
               <div className="video-drop">
                 <div className="drop-icon"><Upload size={22} /></div>
@@ -240,8 +346,20 @@ export default function LitteringApp() {
         </section>
 
         <aside className="review-panel">
-          <div className="review-header"><h2>Event candidates</h2></div>
-          {clip ? <>
+          <div className="review-header"><h2>{clip?.imported ? "Imported human review" : "Event candidates"}</h2></div>
+          {clip?.imported ? <>
+            {clip.imported.length ? <ol className="littering-events">
+              {clip.imported.map(event => <li key={event.category + ":" + event.timestampSeconds}>
+                <button className="quiet-button" onClick={() => {
+                  if (videoRef.current) videoRef.current.currentTime = event.timestampSeconds;
+                }}>{timeCode(event.timestampSeconds)} · {names[event.category]}</button>
+              </li>)}
+            </ol> : <p>NA · No events in the imported review.</p>}
+            <button className="quiet-button" type="button" onClick={() => {
+              updateClip(clip.path, current => ({ ...current, imported: undefined }));
+              setStatus("Restored the prior review for " + clipName(clip.path));
+            }}>Restore prior review</button>
+          </> : clip ? <>
             {!clip.events?.length ? <p>{clip.analyzed ? "Gemini returned no candidates. Review the full clip before signing off." : "Candidate timestamps appear here after Gemini analysis."}</p> : (
               <ol className="littering-events">
                 {clip.events.map((event, index) => (
@@ -279,20 +397,28 @@ export default function LitteringApp() {
         </aside>
       </div>
 
-      {report && <section className="littering-report">
+      {report && !showSettings && <section className="littering-report">
         <div className="littering-report-toolbar">
-          <h1>Littering Act Report</h1>
+          <strong>A4 preview</strong>
           <div className="topbar-actions">
-            <button className="quiet-button" disabled={!reportClips.length || !bridge || saving} onClick={() => void save("csv")}>Save CSV</button>
-            <button className="littering-primary" disabled={!reportClips.length || !bridge || saving} onClick={() => void save("pdf")}>Save PDF</button>
+            <label className="report-zoom">Zoom
+              <select value={fitPage ? "fit" : "100"} onChange={event => setFitPage(event.target.value === "fit")}>
+                <option value="fit">Fit page</option>
+                <option value="100">100%</option>
+              </select>
+            </label>
+            <a className="quiet-button" download="human-review-template.csv" href={"data:text/csv;charset=utf-8," + encodeURIComponent(reviewCsvTemplate)}>CSV template</a>
+            <button className="quiet-button" disabled={!clips.length || busy} onClick={() => csvRef.current?.click()}>Import reviewed CSV</button>
+            <input hidden ref={csvRef} type="file" accept=".csv,text/csv" onChange={event => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) void importReview(file);
+            }} />
+            <button className="quiet-button" disabled={!reportRows.length || !bridge || busy} onClick={() => void save("csv")}>Save CSV</button>
+            <button className="littering-primary" disabled={!reportRows.length || !bridge || busy} onClick={() => void save("pdf")}>Save PDF</button>
           </div>
         </div>
-        <table aria-label="Littering Act Report">
-          <thead><tr><th scope="col">Name of Video Clip</th><th scope="col">Time of the littering act / dog occurrence</th></tr></thead>
-          <tbody>{reportClips.length ? reportClips.map(item => (
-            <tr key={item.path}><td>{displayName(item.path)}</td><td>{reportTimes(item)}</td></tr>
-          )) : <tr><td colSpan={2}>Add video clips in Review.</td></tr>}</tbody>
-        </table>
+        <LitteringReport rows={reportRows} fitPage={fitPage} />
       </section>}
 
       <footer className="statusbar littering-status" role="status">

@@ -327,6 +327,8 @@ function registerIpc() {
         video,
         extension: path.extname(video).toLowerCase(),
         duration: options.duration,
+        model: options.model,
+        resolution: options.resolution,
         key,
         signal: controller.signal,
         onPhase: message => {
